@@ -1,0 +1,8 @@
+//
+// Created by anna on 29.12.17.
+//
+
+#ifndef MIMUW_ADORATE_42_ADORATE_STRUCT_H
+#define MIMUW_ADORATE_42_ADORATE_STRUCT_H
+
+#endif //MIMUW_ADORATE_42_ADORATE_STRUCT_H
