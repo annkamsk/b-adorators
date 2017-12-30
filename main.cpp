@@ -1,91 +1,15 @@
-#include <iostream>
-#include <fstream>
-#include <list>
-#include <unordered_map>
-#include <mutex>
-#include <queue>
-#include <atomic>
-#include <algorithm>
-#include <thread>
-
 #include "blimit.hpp"
+#include "adorate_struct.h"
 
 using std::string;
-using std::cout;
-using std::endl;
 
 std::vector<long> b;
 std::atomic<long> *db;
-std::vector<long> decode;
-std::atomic<bool> *is_in_P;
-std::mutex *mut;
-
-struct Edge {
-    long id;
-    long weigh;
-
-    bool operator < (Edge e) {
-        if (this->weigh == e.weigh) return decode.at(this->id) < decode.at(e.id);
-        return this->weigh < e.weigh;
-    }
-
-    bool operator == (Edge e) {
-        return id == e.id && weigh == e.weigh;
-    }
-
-    Edge(long id, long weigh) : id(id), weigh(weigh) {}
-};
-
-
-
-template<typename T>
-class atom_queue {
-public:
-    void push(const T& value ) {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        m_queque.push(value);
-    }
-
-    long pop() {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        long u = m_queque.front();
-        m_queque.pop();
-        return u;
-    }
-
-    bool empty() const {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        return m_queque.empty();
-    }
-
-    void swap(atom_queue &Q) {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        std::swap(Q.m_queque, m_queque);
-    }
-
-    void clear() {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        while (!m_queque.empty()) {
-            m_queque.pop();
-        }
-    }
-
-private:
-    std::queue<T> m_queque;
-    mutable std::mutex m_mutex;
-};
-
+std::recursive_mutex *mut;
 atom_queue<long> Q;
 atom_queue<long> P;
-std::vector<std::list<Edge>> N;
-
-class Compare {
-public:
-    bool operator() (Edge a, Edge b) {
-        return b < a;
-    }
-};
-std::vector<std::priority_queue<Edge, std::vector<Edge>, Compare>> proposals; // adorators of v
+std::vector<neighbours<Edge>> N;
+std::vector<std::priority_queue<Edge, std::vector<Edge>, Compare>> proposals;
 
 void split(string line, long &idx1, long &idx2, long &weigh) {
     size_t it1 = line.find(' ');
@@ -123,18 +47,13 @@ void read_graph(std::fstream &graph,
     }
 }
 bool is_place(long id, long method) {
+    std::lock_guard<std::recursive_mutex> lock(mut[id]);
     return proposals.at(id).size() < bvalue(method, decode.at(id));
 }
 
 Edge find_eligible(long u, long method, bool &found) {
     Edge eligible = N.at(u).back();
     found = true;
-//    Edge eligible = {-1, -1};
-//    for (Edge p : N.at(u)) {
-//        if (eligible < p) {
-//            eligible = p;
-//        }
-//    }
 
     if (is_place(eligible.id, method)) {
         return eligible;
@@ -143,29 +62,31 @@ Edge find_eligible(long u, long method, bool &found) {
         found = false;
         return eligible;
     }
+    mut[eligible.id].lock();
     Edge lowest_prop = proposals.at(eligible.id).top();
-    if (lowest_prop < Edge{u, eligible.weigh}) return eligible;
-    found = false;
+    mut[eligible.id].unlock();
+    if (Edge{u, eligible.weigh} < lowest_prop) found = false;
     return eligible;
 }
 
 void make_suitor(long u, Edge p, long method) {
     --b.at(u);
-    if (proposals.at(p.id).size() == bvalue(method, decode.at(p.id))) {
+    proposals.at(p.id).push(Edge{u, p.weigh});
+    if (proposals.at(p.id).size() > bvalue(method, decode.at(p.id))) {
         Edge v = proposals.at(p.id).top();
         proposals.at(p.id).pop();
-        ++db[v.id];
-        if (!is_in_P[v.id]) {
-            is_in_P[v.id] = true;
+        if (++db[v.id] == 1) {
             P.push(v.id);
         }
     }
-    proposals.at(p.id).push(Edge{u, p.weigh});
 }
 
 void run(long method) {
     while (!Q.empty()) {
         long u = Q.pop();
+        if (u == -1) {
+            break;
+        }
         while (b.at(u) > 0 && !N.at(u).empty()) {
             bool found = true;
             Edge p = find_eligible(u, method, found);
@@ -182,35 +103,32 @@ void run(long method) {
     }
 }
 
-void reset_containers(std::vector<std::list<Edge>> &neighb, long nodes_numb) {
-    N = std::vector<std::list<Edge>>(neighb);
+void reset_containers() {
+    for (auto it = N.begin(), itend = N.end(); it != itend; ++it) it->reload();
     b.clear();
-    Q.clear();
-    P.clear();
-    proposals = std::vector<std::priority_queue<Edge,
-            std::vector<Edge>, Compare>>(nodes_numb, std::priority_queue<Edge,
-            std::vector<Edge>, Compare>());
 }
 
 void set_containers(long nodes_numb, std::vector<std::list<Edge>> &neighb) {
+    for (auto it = neighb.begin(), endit = neighb.end(); it != endit; ++it) {
+        it->sort();
+    }
+
     proposals = std::vector<std::priority_queue<Edge,
             std::vector<Edge>, Compare>>(nodes_numb, std::priority_queue<Edge,
             std::vector<Edge>, Compare>());
-    mut = new std::mutex[nodes_numb];
+    mut = new std::recursive_mutex[nodes_numb];
     db = new std::atomic<long>[nodes_numb];
     for (long i = 0; i < nodes_numb; ++i) {
         db[i] = 0;
     }
-    is_in_P = new std::atomic<bool>[nodes_numb];
-    for (long i = 0; i < nodes_numb; ++i) {
-        is_in_P[i] = false;
+    for (auto it = neighb.begin(), itend = neighb.end(); it != itend; ++it) {
+        N.emplace_back(*it);
     }
-    N = std::vector<std::list<Edge>>(neighb);
 }
 
 long count_sum() {
     long sum = 0;
-    for (auto a : proposals) {
+    for (auto &a : proposals) {
         while (!a.empty()) {
             sum += a.top().weigh;
             a.pop();
@@ -223,9 +141,6 @@ void update_b(long nodes_numb) {
     for (long i = 0; i < nodes_numb; ++i) {
         b.at(i) += db[i];
         db[i] = 0;
-    }
-    for (long i = 0; i < nodes_numb; ++i) {
-        is_in_P[i] = false;
     }
 }
 
@@ -252,11 +167,12 @@ int main(int argc, char *argv[]) {
     std::vector<std::list<Edge>> neighb;
     read_graph(graph, neighb, nodes_numb);
 
-    for (auto it = neighb.begin(), endit = neighb.end(); it != endit; ++it) {
-        it->sort();
-    }
     set_containers(nodes_numb, neighb);
 
+    std::thread *th = nullptr;
+    if (thread_count > 1) {
+        th = new std::thread[thread_count - 1];
+    }
     for (long i = 0; i <= b_limit; ++i) {
 
         for (long j = 0; j < nodes_numb; ++j) {
@@ -264,10 +180,6 @@ int main(int argc, char *argv[]) {
             b.push_back(bvalue(i, decode.at(j)));
         }
         while (!Q.empty()) {
-            std::thread *th = NULL;
-            if (thread_count > 1) {
-                th = new std::thread[thread_count - 1];
-            }
             for (long j = 0; j < thread_count - 1; ++j) {
                 th[j] = std::thread(run, i);
             }
@@ -278,14 +190,12 @@ int main(int argc, char *argv[]) {
 
             Q.swap(P);
             update_b(nodes_numb);
-            delete[] th;
         }
         std::cout << count_sum() << std::endl;
-        reset_containers(neighb, nodes_numb);
+        reset_containers();
     }
     delete[] mut;
     delete[] db;
-    delete[] is_in_P;
-
+    delete[] th;
     return 0;
 }
