@@ -5,6 +5,7 @@
 #include <fstream>
 #include <list>
 #include <unordered_map>
+#include <condition_variable>
 
 #include <algorithm>
 #include <thread>
@@ -12,6 +13,7 @@
 #include <queue>
 #include <atomic>
 
+const int NOT_FOUND = -1;
 
 std::vector<long> decode;
 
@@ -25,13 +27,17 @@ struct Edge {
     }
 };
 
+bool comp(Edge a, Edge b) {
+    return b < a;
+}
+
 template<typename T>
 class neighbours {
 public:
-    neighbours() = default;
-    neighbours(std::list<T> &other) : N(other), it(N.rbegin()){}
+    neighbours() : it(N.rbegin()), sorted(N.rbegin()) {}
 
-    neighbours(const neighbours &other) : N(other.N), it(N.rbegin()) {}
+    neighbours(const neighbours &other) : N(other.N), it(N.rbegin()),
+                                          sorted(N.rbegin()) {}
 
     neighbours(neighbours && other) = default;
 
@@ -39,7 +45,14 @@ public:
         return it == N.rend();
     }
 
+    void set_bvalue(unsigned int b) {
+        bvalue = 2 * b;
+    }
+
     T back() {
+        if (it == sorted) {
+            sort();
+        }
         return *it;
     }
 
@@ -47,9 +60,20 @@ public:
         ++it;
     }
 
-    void push_back(T &el) {
+    void push_back(const T &el) {
         N.push_back(el);
         it = N.rbegin();
+        sorted = N.rbegin();
+    }
+
+    void sort() {
+        if (sorted + bvalue > N.rend()) {
+            std::sort(it, N.rend(), comp);
+            sorted = N.rend();
+        } else {
+            std::partial_sort(it, sorted + bvalue, N.rend(), comp);
+            sorted += bvalue;
+        }
     }
 
     void reload() {
@@ -57,8 +81,10 @@ public:
     }
 
 private:
-    std::list<T> N;
-    typename std::list<T>::reverse_iterator it;
+    std::vector<T> N;
+    typename std::vector<T>::reverse_iterator it;
+    typename std::vector<T>::reverse_iterator sorted;
+    unsigned int bvalue;
 };
 
 template<typename T>
@@ -72,7 +98,7 @@ public:
     long pop() {
         std::lock_guard<std::mutex> lock(m_mutex);
         if (m_queue.empty()) {
-            return -1;
+            return NOT_FOUND;
         }
         long u = m_queue.front();
         m_queue.pop();
@@ -87,13 +113,6 @@ public:
     void swap(atom_queue &Q) {
         std::lock_guard<std::mutex> lock(m_mutex);
         std::swap(Q.m_queue, m_queue);
-    }
-
-    void clear() {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        while (!m_queue.empty()) {
-            m_queue.pop();
-        }
     }
 
 private:
